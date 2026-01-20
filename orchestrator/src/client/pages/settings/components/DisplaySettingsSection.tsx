@@ -35,7 +35,7 @@ export const DisplaySettingsSection: React.FC<DisplaySettingsSectionProps> = ({
                             id="showSponsorInfo"
                             checked={isChecked}
                             onCheckedChange={(checked) => {
-                                setShowSponsorInfoDraft(checked === true ? true : false)
+                                setShowSponsorInfoDraft(checked === "indeterminate" ? null : checked === true)
                             }}
                             disabled={isLoading || isSaving}
                         />
