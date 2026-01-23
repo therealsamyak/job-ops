@@ -11,7 +11,7 @@ import {
 } from '@server/services/resumeProjects.js';
 import { getProfile } from '@server/services/profile.js';
 import { getEffectiveSettings } from '@server/services/settings.js';
-import { listResumes } from '@server/services/rxresume.js';
+import { listResumes, RxResumeCredentialsError } from '@server/services/rxresume-v4.js';
 
 export const settingsRouter = Router();
 
@@ -195,13 +195,24 @@ settingsRouter.patch('/', async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/settings/rx-resumes - Fetch list of resumes from Reactive Resume API
+ * GET /api/settings/rx-resumes - Fetch list of resumes from Reactive Resume v4 API
  */
 settingsRouter.get('/rx-resumes', async (_req: Request, res: Response) => {
   try {
     const resumes = await listResumes();
-    res.json({ success: true, data: { resumes } });
+
+    // Map to expected format (id, name)
+    res.json({
+      success: true,
+      data: {
+        resumes: resumes.map((resume) => ({ id: resume.id, name: resume.name })),
+      },
+    });
   } catch (error) {
+    if (error instanceof RxResumeCredentialsError) {
+      res.status(400).json({ success: false, error: error.message });
+      return;
+    }
     const message = error instanceof Error ? error.message : 'Unknown error';
     console.error(`❌ Failed to fetch Reactive Resumes: ${message}`);
     res.status(500).json({ success: false, error: message });

@@ -1,3 +1,10 @@
+// rxresume-v5.ts
+// Future-facing v5/OpenAPI implementation that uses API keys.
+// - Kept alongside v4 files so we can swap imports when v5 is ready.
+// - Uses RXRESUME_API_KEY and /api/openapi endpoints.
+//
+// NOTE: Not currently wired in; keep for migration.
+
 import { resumeDataSchema } from "../../shared/rxresume-schema.js";
 
 export interface RxResumeResponse {

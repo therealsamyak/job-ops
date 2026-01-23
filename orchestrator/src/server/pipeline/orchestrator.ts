@@ -7,15 +7,14 @@
  * 3. Leave all jobs in "discovered" for manual processing
  */
 
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { runCrawler } from '../services/crawler.js';
 import { runJobSpy } from '../services/jobspy.js';
 import { runUkVisaJobs } from '../services/ukvisajobs.js';
 import { scoreJobSuitability } from '../services/scorer.js';
 import { generateTailoring } from '../services/summary.js';
 import { generatePdf } from '../services/pdf.js';
-import { getProfile } from '../services/profile.js';
+import { DEFAULT_PROFILE_PATH, getProfile } from '../services/profile.js';
 import { getSetting } from '../repositories/settings.js';
 import { pickProjectIdsForJob } from '../services/projectSelection.js';
 import { extractProjectsFromProfile, resolveResumeProjectsSettings } from '../services/resumeProjects.js';
@@ -26,9 +25,6 @@ import * as visaSponsors from '../services/visa-sponsors/index.js';
 import { progressHelpers, resetProgress, updateProgress } from './progress.js';
 import type { CreateJobInput, Job, JobSource, PipelineConfig } from '../../shared/types.js';
 import { getDataDir } from '../config/dataDir.js';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_PROFILE_PATH = join(__dirname, '../../../../resume-generator/base.json');
 
 const DEFAULT_CONFIG: PipelineConfig = {
   topN: 10,

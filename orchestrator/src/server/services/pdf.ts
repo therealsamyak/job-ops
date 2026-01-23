@@ -1,21 +1,22 @@
 /**
- * Service for generating PDF resumes using RxResume automation.
+ * Service for generating PDF resumes using RxResume v4 API.
  */
 
 import { join } from 'path';
-import { readFile, writeFile, mkdir, access } from 'fs/promises';
-import { existsSync } from 'fs';
-import { spawn } from 'child_process';
+import { mkdir, access } from 'fs/promises';
+import { existsSync, createWriteStream } from 'fs';
 import { createId } from '@paralleldrive/cuid2';
+import { pipeline } from 'stream/promises';
+import { Readable } from 'stream';
 
 import { getSetting } from '../repositories/settings.js';
 import { pickProjectIdsForJob } from './projectSelection.js';
 import { extractProjectsFromProfile, resolveResumeProjectsSettings } from './resumeProjects.js';
 import { getDataDir } from '../config/dataDir.js';
 import { getProfile } from './profile.js';
+import { RxResumeClient } from './rxresume-client.js';
 
 const OUTPUT_DIR = join(getDataDir(), 'pdfs');
-const RESUME_GEN_DIR = process.env.RESUME_GEN_DIR || join(getDataDir(), '..', 'resume-generator');
 
 export interface PdfResult {
   success: boolean;
@@ -30,7 +31,63 @@ export interface TailoredPdfContent {
 }
 
 /**
- * Generate a tailored PDF resume for a job using RxResume automation.
+ * Get RxResume credentials from environment variables or database settings.
+ */
+async function getCredentials(): Promise<{ email: string; password: string; baseUrl: string }> {
+  // First check environment variables
+  let email = process.env.RXRESUME_EMAIL || '';
+  let password = process.env.RXRESUME_PASSWORD || '';
+  const baseUrl = process.env.RXRESUME_URL || 'https://v4.rxresu.me';
+
+  // Fall back to database settings if env vars are not set
+  if (!email) {
+    email = (await getSetting('rxresumeEmail')) || '';
+  }
+  if (!password) {
+    password = (await getSetting('rxresumePassword')) || '';
+  }
+
+  if (!email || !password) {
+    throw new Error(
+      'RxResume credentials not configured. Set RXRESUME_EMAIL and RXRESUME_PASSWORD environment variables or configure them in settings.'
+    );
+  }
+
+  return { email, password, baseUrl };
+}
+
+/**
+ * Download a file from a URL and save it to a local path.
+ */
+async function downloadFile(url: string, outputPath: string): Promise<void> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to download PDF: HTTP ${response.status} ${response.statusText}`);
+  }
+
+  if (!response.body) {
+    throw new Error('No response body from PDF download');
+  }
+
+  // Convert Web ReadableStream to Node readable
+  const nodeReadable = Readable.fromWeb(response.body as any);
+  const fileStream = createWriteStream(outputPath);
+
+  await pipeline(nodeReadable, fileStream);
+}
+
+/**
+ * Generate a tailored PDF resume for a job using the RxResume v4 API.
+ * 
+ * Flow:
+ * 1. Prepare resume data with tailored content and project selection
+ * 2. Get auth token (uses cached token or logs in)
+ * 3. Import/create resume on RxResume
+ * 4. Request print to get PDF URL
+ * 5. Download PDF locally
+ * 6. Delete temporary resume from RxResume
+ * 
+ * Token refresh is handled automatically on 401 errors.
  */
 export async function generatePdf(
   jobId: string,
@@ -39,7 +96,7 @@ export async function generatePdf(
   baseResumePath?: string,
   selectedProjectIds?: string | null
 ): Promise<PdfResult> {
-  console.log(`📄 Generating PDF for job ${jobId}...`);
+  console.log(`📄 Generating PDF for job ${jobId} using RxResume v4 API...`);
 
   try {
     // Ensure output directory exists
@@ -47,9 +104,13 @@ export async function generatePdf(
       await mkdir(OUTPUT_DIR, { recursive: true });
     }
 
+    // Get credentials and initialize client
+    const { email, password, baseUrl } = await getCredentials();
+    const client = new RxResumeClient(baseUrl);
+
     // Read base resume
     const baseResume = baseResumePath
-      ? JSON.parse(await readFile(baseResumePath, 'utf-8'))
+      ? JSON.parse(await import('fs/promises').then(fs => fs.readFile(baseResumePath, 'utf-8')))
       : JSON.parse(JSON.stringify(await getProfile()));
 
     // Sanitize skills: Ensure all skills have required schema fields (visible, description, id, level, keywords)
@@ -152,67 +213,53 @@ export async function generatePdf(
       console.warn(`   ⚠️ Project visibility step failed for job ${jobId}:`, err);
     }
 
-    // Write modified resume to temp file
-    const tempResumePath = join(RESUME_GEN_DIR, `temp_resume_${jobId}.json`);
-    await writeFile(tempResumePath, JSON.stringify(baseResume, null, 2));
+    // Use withAutoRefresh to handle token caching and 401 retry automatically
+    const outputPath = join(OUTPUT_DIR, `resume_${jobId}.pdf`);
 
-    // Generate PDF using Python script - output directly to our data folder
-    const outputFilename = `resume_${jobId}.pdf`;
-    const outputPath = join(OUTPUT_DIR, outputFilename);
+    await client.withAutoRefresh(email, password, async (token) => {
+      let resumeId: string | null = null;
 
-    await runPythonPdfGenerator(tempResumePath, outputFilename, OUTPUT_DIR);
+      try {
+        // Create resume on RxResume
+        console.log(`   📤 Uploading resume to RxResume...`);
+        resumeId = await client.create(baseResume, token);
+        console.log(`   ✅ Resume created with ID: ${resumeId}`);
 
-    // Cleanup temp file
-    try {
-      const { unlink } = await import('fs/promises');
-      await unlink(tempResumePath);
-    } catch {
-      // Ignore cleanup errors
-    }
+        // Get PDF URL
+        console.log(`   🖨️ Requesting PDF generation...`);
+        const pdfUrl = await client.print(resumeId, token);
+        console.log(`   ✅ PDF URL received: ${pdfUrl}`);
 
-    console.log(`✅ PDF generated: ${outputPath}`);
+        // Download PDF
+        console.log(`   📥 Downloading PDF...`);
+        await downloadFile(pdfUrl, outputPath);
+        console.log(`   ✅ PDF saved to: ${outputPath}`);
 
+        // Cleanup: delete temporary resume from RxResume
+        console.log(`   🧹 Cleaning up temporary resume...`);
+        await client.delete(resumeId, token);
+        console.log(`   ✅ Temporary resume deleted from RxResume`);
+        resumeId = null;
+      } finally {
+        // Attempt cleanup if resume was created but not deleted
+        if (resumeId) {
+          try {
+            console.log(`   🧹 Attempting cleanup of orphaned resume...`);
+            await client.delete(resumeId, token);
+          } catch {
+            console.warn(`   ⚠️ Failed to cleanup orphaned resume ${resumeId}`);
+          }
+        }
+      }
+    });
+
+    console.log(`✅ PDF generated successfully: ${outputPath}`);
     return { success: true, pdfPath: outputPath };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     console.error(`❌ PDF generation failed: ${message}`);
     return { success: false, error: message };
   }
-}
-
-/**
- * Run the Python RXResume automation script.
- */
-async function runPythonPdfGenerator(
-  jsonPath: string,
-  outputFilename: string,
-  outputDir: string
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    // Use the virtual environment's Python (or system python in Docker)
-    const pythonPath = process.env.PYTHON_PATH || join(RESUME_GEN_DIR, '.venv', 'bin', 'python');
-
-    const child = spawn(pythonPath, ['rxresume_automation.py'], {
-      cwd: RESUME_GEN_DIR,
-      env: {
-        ...process.env,
-        RESUME_JSON_PATH: jsonPath,
-        OUTPUT_FILENAME: outputFilename,
-        OUTPUT_DIR: outputDir,
-      },
-      stdio: 'inherit',
-    });
-
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`Python script exited with code ${code}`));
-      }
-    });
-
-    child.on('error', reject);
-  });
 }
 
 /**
