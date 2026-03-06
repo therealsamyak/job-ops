@@ -1,8 +1,14 @@
-import { SettingsInput } from "@client/pages/settings/components/SettingsInput";
+import { TokenizedInput } from "@client/pages/orchestrator/TokenizedInput";
+import {
+  getMatchingWritingStylePresetId,
+  resolveWritingStyleDraft,
+  WRITING_STYLE_PRESETS,
+} from "@client/pages/settings/constants";
 import type { ChatValues } from "@client/pages/settings/types";
 import type { UpdateSettingsInput } from "@shared/settings-schema.js";
 import type React from "react";
-import { Controller, useFormContext } from "react-hook-form";
+import { useState } from "react";
+import { Controller, useFormContext, useWatch } from "react-hook-form";
 import {
   AccordionContent,
   AccordionItem,
@@ -16,12 +22,28 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
 
 type ChatSettingsSectionProps = {
   values: ChatValues;
   isLoading: boolean;
   isSaving: boolean;
 };
+
+function parseTokenizedTerms(input: string): string[] {
+  return input
+    .split(/[\n,]/g)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function parseStoredTerms(value: string | null | undefined): string[] {
+  return parseTokenizedTerms(value ?? "");
+}
+
+function normalizeBlank(value: string | null | undefined): string | undefined {
+  return value == null || value === "" ? undefined : value;
+}
 
 export const ChatSettingsSection: React.FC<ChatSettingsSectionProps> = ({
   values,
@@ -30,15 +52,100 @@ export const ChatSettingsSection: React.FC<ChatSettingsSectionProps> = ({
 }) => {
   const { tone, formality, constraints, doNotUse } = values;
 
-  const { control, register } = useFormContext<UpdateSettingsInput>();
+  const { control, register, setValue } = useFormContext<UpdateSettingsInput>();
+  const [doNotUseDraft, setDoNotUseDraft] = useState("");
+  const [toneValue, formalityValue, constraintsValue, doNotUseValue] = useWatch(
+    {
+      control,
+      name: [
+        "chatStyleTone",
+        "chatStyleFormality",
+        "chatStyleConstraints",
+        "chatStyleDoNotUse",
+      ],
+    },
+  );
+  const toneDraft = normalizeBlank(toneValue);
+  const formalityDraft = normalizeBlank(formalityValue);
+  const constraintsDraft = normalizeBlank(constraintsValue);
+  const doNotUseDraftValue = normalizeBlank(doNotUseValue);
+  const resolvedStyle = resolveWritingStyleDraft({
+    values: {
+      tone: toneDraft,
+      formality: formalityDraft,
+      constraints: constraintsDraft,
+      doNotUse: doNotUseDraftValue,
+    },
+    defaults: values,
+  });
+  const selectedPresetId =
+    getMatchingWritingStylePresetId(resolvedStyle) ?? "custom";
+  const doNotUseTokens = parseStoredTerms(
+    doNotUseDraftValue ?? doNotUse.default,
+  );
 
   return (
     <AccordionItem value="chat" className="border rounded-lg px-4">
       <AccordionTrigger className="hover:no-underline py-4">
-        <span className="text-base font-semibold">Ghostwriter</span>
+        <span className="text-base font-semibold">Writing Style</span>
       </AccordionTrigger>
       <AccordionContent className="pb-4">
         <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            These defaults shape AI-generated writing across Ghostwriter and
+            resume tailoring.
+          </p>
+
+          <div className="space-y-2">
+            <label htmlFor="writingStylePreset" className="text-sm font-medium">
+              Preset
+            </label>
+            <Select
+              value={selectedPresetId}
+              onValueChange={(value) => {
+                if (value === "custom") return;
+
+                const preset = WRITING_STYLE_PRESETS.find(
+                  (item) => item.id === value,
+                );
+                if (!preset) return;
+
+                setValue("chatStyleTone", preset.values.tone, {
+                  shouldDirty: true,
+                });
+                setValue("chatStyleFormality", preset.values.formality, {
+                  shouldDirty: true,
+                });
+                setValue("chatStyleConstraints", preset.values.constraints, {
+                  shouldDirty: true,
+                });
+                setValue("chatStyleDoNotUse", preset.values.doNotUse, {
+                  shouldDirty: true,
+                });
+              }}
+              disabled={isLoading || isSaving}
+            >
+              <SelectTrigger id="writingStylePreset">
+                <SelectValue placeholder="Choose a writing preset" />
+              </SelectTrigger>
+              <SelectContent>
+                {WRITING_STYLE_PRESETS.map((preset) => (
+                  <SelectItem key={preset.id} value={preset.id}>
+                    {preset.label}
+                  </SelectItem>
+                ))}
+                <SelectItem value="custom">Custom</SelectItem>
+              </SelectContent>
+            </Select>
+            <div className="text-xs text-muted-foreground">
+              {selectedPresetId === "custom"
+                ? "Your current values are custom."
+                : (WRITING_STYLE_PRESETS.find(
+                    (preset) => preset.id === selectedPresetId,
+                  )?.description ?? "")}
+            </div>
+          </div>
+
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
               <label htmlFor="chatStyleTone" className="text-sm font-medium">
@@ -49,7 +156,7 @@ export const ChatSettingsSection: React.FC<ChatSettingsSectionProps> = ({
                 control={control}
                 render={({ field }) => (
                   <Select
-                    value={field.value ?? tone.default}
+                    value={normalizeBlank(field.value) ?? tone.default}
                     onValueChange={(value) => field.onChange(value)}
                     disabled={isLoading || isSaving}
                   >
@@ -79,7 +186,7 @@ export const ChatSettingsSection: React.FC<ChatSettingsSectionProps> = ({
                 control={control}
                 render={({ field }) => (
                   <Select
-                    value={field.value ?? formality.default}
+                    value={normalizeBlank(field.value) ?? formality.default}
                     onValueChange={(value) => field.onChange(value)}
                     disabled={isLoading || isSaving}
                   >
@@ -97,23 +204,54 @@ export const ChatSettingsSection: React.FC<ChatSettingsSectionProps> = ({
             </div>
           </div>
 
-          <SettingsInput
-            label="Constraints"
-            inputProps={register("chatStyleConstraints")}
-            placeholder="Example: keep answers under 120 words and include bullet points"
-            disabled={isLoading || isSaving}
-            helper="Optional global writing constraints used by Ghostwriter replies."
-            current={constraints.effective || "—"}
-          />
+          <div className="space-y-2">
+            <label
+              htmlFor="chatStyleConstraints"
+              className="text-sm font-medium"
+            >
+              Constraints
+            </label>
+            <Textarea
+              id="chatStyleConstraints"
+              placeholder="Example: keep answers under 120 words and include bullet points"
+              disabled={isLoading || isSaving}
+              {...register("chatStyleConstraints")}
+            />
+            <div className="text-xs text-muted-foreground">
+              Optional global writing constraints applied to Ghostwriter replies
+              and resume tailoring.
+            </div>
+            <div className="text-xs text-muted-foreground">
+              Current:{" "}
+              <span className="font-mono">{constraints.effective || "—"}</span>
+            </div>
+          </div>
 
-          <SettingsInput
-            label="Do-not-use terms"
-            inputProps={register("chatStyleDoNotUse")}
-            placeholder="Example: synergize, leverage"
-            disabled={isLoading || isSaving}
-            helper="Optional comma-separated words or phrases to avoid."
-            current={doNotUse.effective || "—"}
-          />
+          <div className="space-y-2">
+            <label htmlFor="chatStyleDoNotUse" className="text-sm font-medium">
+              Do-not-use terms
+            </label>
+            <TokenizedInput
+              id="chatStyleDoNotUse"
+              values={doNotUseTokens}
+              draft={doNotUseDraft}
+              parseInput={parseTokenizedTerms}
+              onDraftChange={setDoNotUseDraft}
+              onValuesChange={(nextValues) =>
+                setValue("chatStyleDoNotUse", nextValues.join(", "), {
+                  shouldDirty: true,
+                })
+              }
+              placeholder='e.g. "synergize", "leverage"'
+              helperText="Optional words or phrases the AI should avoid when generating text. This is guidance to the model, not a guaranteed blocklist."
+              removeLabelPrefix="Remove do-not-use term"
+              disabled={isLoading || isSaving}
+            />
+            <div className="text-xs text-muted-foreground">
+              Current:{" "}
+              <span className="font-mono">{doNotUse.effective || "—"}</span>
+            </div>
+          </div>
 
           <Separator />
 
