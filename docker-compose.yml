@@ -29,8 +29,17 @@ services:
       - CODEX_HOME=/app/codex-home
 
     env_file:
-      - path: ./.env
+      - path: ./.env.local
         required: false
+    restart: unless-stopped
+    networks:
+      - sk-cachyos-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     develop:
       watch:
         # Rebuild container when package.json changes
@@ -67,17 +76,14 @@ services:
         - path: ./extractors/jobspy
           target: /app/extractors/jobspy
           action: sync+restart
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
 
 secrets:
   github_token:
     environment: GITHUB_TOKEN
+
+networks:
+  sk-cachyos-network:
+    external: true
 
 # Volumes for data persistence
 volumes:
