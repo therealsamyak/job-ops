@@ -36,12 +36,12 @@ export const BasicAuthStep: React.FC<{
           value: "enable",
           title: "Lock it down",
           description:
-            "Require sign-in before anyone can access protected parts of this workspace.",
+            "Require a password before any changes are made to your data.",
         },
         {
           value: "skip",
           title: "Skip for now",
-          description: "You can add authentication later from Settings.",
+          description: "You can add protection later from Settings.",
         },
       ].map((option) => {
         const checked = basicAuthChoice === option.value;
@@ -102,7 +102,7 @@ export const BasicAuthStep: React.FC<{
             onChange={(event) =>
               onBasicAuthPasswordChange(event.currentTarget.value)
             }
-            placeholder="Create a password"
+            placeholder="Create a strong password"
             disabled={isBusy}
           />
         </div>

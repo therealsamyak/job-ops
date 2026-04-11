@@ -55,11 +55,6 @@ describe("useOnboardingRequirement", () => {
         default: "",
         override: null,
       },
-      searchTerms: {
-        value: ["Platform Engineer"],
-        default: ["web developer"],
-        override: null,
-      },
       rxresumeUrl: null,
       basicAuthActive: false,
       onboardingBasicAuthDecision: null,
@@ -85,11 +80,6 @@ describe("useOnboardingRequirement", () => {
 
     currentSettings = {
       ...currentSettings,
-      searchTerms: {
-        value: ["Platform Engineer"],
-        default: ["web developer"],
-        override: ["Platform Engineer"],
-      },
       onboardingBasicAuthDecision: "skipped",
     };
     rerender();
@@ -111,11 +101,6 @@ describe("useOnboardingRequirement", () => {
         value: "http://localhost:1234",
         default: "",
         override: null,
-      },
-      searchTerms: {
-        value: ["Platform Engineer"],
-        default: ["web developer"],
-        override: ["Platform Engineer"],
       },
       rxresumeUrl: null,
       basicAuthActive: false,
@@ -245,11 +230,6 @@ describe("useOnboardingRequirement", () => {
         default: "rxresume",
         override: null,
       },
-      searchTerms: {
-        value: ["Platform Engineer"],
-        default: ["web developer"],
-        override: ["Platform Engineer"],
-      },
       rxresumeUrl: null,
       basicAuthActive: false,
       onboardingBasicAuthDecision: "skipped",
@@ -298,11 +278,6 @@ describe("useOnboardingRequirement", () => {
         default: "rxresume",
         override: null,
       },
-      searchTerms: {
-        value: ["Platform Engineer"],
-        default: ["web developer"],
-        override: ["Platform Engineer"],
-      },
       rxresumeUrl: null,
       basicAuthActive: false,
       onboardingBasicAuthDecision: "skipped",
@@ -346,11 +321,6 @@ describe("useOnboardingRequirement", () => {
         default: "rxresume",
         override: null,
       },
-      searchTerms: {
-        value: ["Platform Engineer"],
-        default: ["web developer"],
-        override: ["Platform Engineer"],
-      },
       rxresumeBaseResumeId: "resume-1",
       rxresumeUrl: null,
       basicAuthActive: false,
@@ -376,52 +346,5 @@ describe("useOnboardingRequirement", () => {
 
     expect(api.validateRxresume).toHaveBeenCalledTimes(1);
     expect(result.current.complete).toBe(true);
-  });
-
-  it("requires an explicit saved search-terms override before onboarding is complete", async () => {
-    const currentSettings: any = {
-      llmProvider: {
-        value: "openrouter",
-        default: "openrouter",
-        override: null,
-      },
-      llmBaseUrl: {
-        value: "",
-        default: "",
-        override: null,
-      },
-      pdfRenderer: {
-        value: "latex",
-        default: "rxresume",
-        override: null,
-      },
-      searchTerms: {
-        value: ["web developer"],
-        default: ["web developer"],
-        override: null,
-      },
-      rxresumeUrl: null,
-      basicAuthActive: false,
-      onboardingBasicAuthDecision: "skipped",
-    };
-
-    vi.mocked(useSettings).mockImplementation(() => ({
-      settings: currentSettings,
-      isLoading: false,
-      refreshSettings: vi.fn(),
-      error: null,
-      showSponsorInfo: true,
-      renderMarkdownInJobDescriptions: true,
-    }));
-
-    const { result } = renderHookWithQueryClient(() =>
-      useOnboardingRequirement(),
-    );
-
-    await waitFor(() => {
-      expect(result.current.checking).toBe(false);
-    });
-
-    expect(result.current.complete).toBe(false);
   });
 });
