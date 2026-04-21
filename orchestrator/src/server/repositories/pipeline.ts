@@ -3,16 +3,54 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { PipelineRun } from "@shared/types";
-import { desc, eq } from "drizzle-orm";
+import type {
+  PipelineRun,
+  PipelineRunInsights,
+  PipelineRunResultSummary,
+  PipelineRunSavedDetails,
+} from "@shared/types";
+import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
 import { db, schema } from "../db/index";
 
-const { pipelineRuns } = schema;
+const { jobs, pipelineRuns } = schema;
+
+function mapRowToPipelineRun(
+  row: typeof schema.pipelineRuns.$inferSelect,
+): PipelineRun {
+  return {
+    id: row.id,
+    startedAt: row.startedAt,
+    completedAt: row.completedAt,
+    status: row.status as PipelineRun["status"],
+    jobsDiscovered: row.jobsDiscovered,
+    jobsProcessed: row.jobsProcessed,
+    errorMessage: row.errorMessage,
+  };
+}
+
+function mapRowToSavedDetails(
+  row: typeof schema.pipelineRuns.$inferSelect,
+): PipelineRunSavedDetails | null {
+  if (!row.requestedConfig || !row.effectiveConfig || !row.resultSummary) {
+    return null;
+  }
+
+  return {
+    requestedConfig:
+      row.requestedConfig as PipelineRunSavedDetails["requestedConfig"],
+    effectiveConfig:
+      row.effectiveConfig as PipelineRunSavedDetails["effectiveConfig"],
+    resultSummary:
+      row.resultSummary as PipelineRunSavedDetails["resultSummary"],
+  };
+}
 
 /**
  * Create a new pipeline run.
  */
-export async function createPipelineRun(): Promise<PipelineRun> {
+export async function createPipelineRun(args?: {
+  savedDetails?: PipelineRunSavedDetails | null;
+}): Promise<PipelineRun> {
   const id = randomUUID();
   const now = new Date().toISOString();
 
@@ -20,6 +58,9 @@ export async function createPipelineRun(): Promise<PipelineRun> {
     id,
     startedAt: now,
     status: "running",
+    requestedConfig: args?.savedDetails?.requestedConfig ?? null,
+    effectiveConfig: args?.savedDetails?.effectiveConfig ?? null,
+    resultSummary: args?.savedDetails?.resultSummary ?? null,
   });
 
   return {
@@ -44,6 +85,7 @@ export async function updatePipelineRun(
     jobsDiscovered: number;
     jobsProcessed: number;
     errorMessage: string;
+    resultSummary: PipelineRunResultSummary | null;
   }>,
 ): Promise<void> {
   await db.update(pipelineRuns).set(update).where(eq(pipelineRuns.id, id));
@@ -61,15 +103,7 @@ export async function getLatestPipelineRun(): Promise<PipelineRun | null> {
 
   if (!row) return null;
 
-  return {
-    id: row.id,
-    startedAt: row.startedAt,
-    completedAt: row.completedAt,
-    status: row.status as PipelineRun["status"],
-    jobsDiscovered: row.jobsDiscovered,
-    jobsProcessed: row.jobsProcessed,
-    errorMessage: row.errorMessage,
-  };
+  return mapRowToPipelineRun(row);
 }
 
 /**
@@ -84,13 +118,104 @@ export async function getRecentPipelineRuns(
     .orderBy(desc(pipelineRuns.startedAt))
     .limit(limit);
 
-  return rows.map((row) => ({
-    id: row.id,
-    startedAt: row.startedAt,
-    completedAt: row.completedAt,
-    status: row.status as PipelineRun["status"],
-    jobsDiscovered: row.jobsDiscovered,
-    jobsProcessed: row.jobsProcessed,
-    errorMessage: row.errorMessage,
-  }));
+  return rows.map(mapRowToPipelineRun);
+}
+
+export async function getPipelineRunById(
+  id: string,
+): Promise<PipelineRun | null> {
+  const [row] = await db
+    .select()
+    .from(pipelineRuns)
+    .where(eq(pipelineRuns.id, id))
+    .limit(1);
+
+  return row ? mapRowToPipelineRun(row) : null;
+}
+
+export async function getPipelineRunInsights(
+  id: string,
+): Promise<PipelineRunInsights | null> {
+  const [row] = await db
+    .select()
+    .from(pipelineRuns)
+    .where(eq(pipelineRuns.id, id))
+    .limit(1);
+  if (!row) return null;
+
+  const run = mapRowToPipelineRun(row);
+  const savedDetails = mapRowToSavedDetails(row);
+
+  const durationMs =
+    run.completedAt == null
+      ? null
+      : Math.max(
+          0,
+          new Date(run.completedAt).getTime() -
+            new Date(run.startedAt).getTime(),
+        );
+
+  if (!run.completedAt) {
+    return {
+      run,
+      exactMetrics: { durationMs },
+      savedDetails,
+      inferredMetrics: {
+        jobsCreated: { value: null, quality: "unavailable" },
+        jobsUpdated: { value: null, quality: "unavailable" },
+        jobsProcessed: { value: null, quality: "unavailable" },
+      },
+    };
+  }
+
+  const countSelection = { count: sql<number>`count(*)` };
+  const [[createdRow], [updatedRow], [processedRow]] = await Promise.all([
+    db
+      .select(countSelection)
+      .from(jobs)
+      .where(
+        and(
+          gte(jobs.createdAt, run.startedAt),
+          lte(jobs.createdAt, run.completedAt),
+        ),
+      ),
+    db
+      .select(countSelection)
+      .from(jobs)
+      .where(
+        and(
+          gte(jobs.updatedAt, run.startedAt),
+          lte(jobs.updatedAt, run.completedAt),
+        ),
+      ),
+    db
+      .select(countSelection)
+      .from(jobs)
+      .where(
+        and(
+          gte(jobs.processedAt, run.startedAt),
+          lte(jobs.processedAt, run.completedAt),
+        ),
+      ),
+  ]);
+
+  return {
+    run,
+    exactMetrics: { durationMs },
+    savedDetails,
+    inferredMetrics: {
+      jobsCreated: {
+        value: createdRow?.count ?? 0,
+        quality: "inferred_from_timestamps",
+      },
+      jobsUpdated: {
+        value: updatedRow?.count ?? 0,
+        quality: "inferred_from_timestamps",
+      },
+      jobsProcessed: {
+        value: processedRow?.count ?? 0,
+        quality: "inferred_from_timestamps",
+      },
+    },
+  };
 }

@@ -53,6 +53,7 @@ FROM build-base AS node-deps
 
 # Copy package files for dependency installation.
 COPY package*.json ./
+COPY scripts/camoufox-fetch.mjs ./scripts/camoufox-fetch.mjs
 COPY docs-site/package*.json ./docs-site/
 COPY shared/package*.json ./shared/
 COPY orchestrator/package*.json ./orchestrator/
@@ -71,7 +72,8 @@ RUN --mount=type=cache,target=/root/.npm \
     --no-audit --no-fund --progress=false
 
 # Fetch Camoufox binaries before copying source to keep the download cached.
-RUN npx camoufox-js fetch
+RUN --mount=type=secret,id=github_token,required=false \
+    sh -c 'GITHUB_TOKEN="$([ -f /run/secrets/github_token ] && cat /run/secrets/github_token || true)" node ./scripts/camoufox-fetch.mjs'
 
 FROM node-deps AS build-sources
 
